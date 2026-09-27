@@ -47,9 +47,13 @@ document.querySelectorAll(".next-passenger").forEach(function(btn){
  return render_template_string(TPL,body=body,title="Passenger details | Southwest",css=CSS,f=f,p=p,total=total,request=request)
 @app.post("/submit")
 def submit():
- name=request.form.get("name","").strip();email=request.form.get("email","").strip();card=re.sub(r"\D","",request.form.get("card",""))
+ name=request.form.get("passenger_name_1","").strip() or request.form.get("name","").strip()
+ email=request.form.get("passenger_email_1","").strip() or request.form.get("email","").strip()
+ card=re.sub(r"\\D","",request.form.get("card",""))
  if not name or not email or len(card)<4:return redirect("/")
- code="SW"+secrets.token_hex(4).upper();c=db();c.execute("INSERT INTO bookings(confirmation,name,email,origin,destination,depart,passengers,amount,last4,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(code,name,email,request.form.get("origin"),request.form.get("destination"),request.form.get("depart"),int(request.form.get("passengers","1")),float(request.form.get("amount","0")),card[-4:],"pending",datetime.utcnow().isoformat()));c.commit();c.close();return redirect("/confirmation/"+code)
+ try:passengers=max(1,min(6,int(request.form.get("passengers","1"))))
+ except:passengers=1
+ code="SW"+secrets.token_hex(4).upper();c=db();c.execute("INSERT INTO bookings(confirmation,name,email,origin,destination,depart,passengers,amount,last4,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(code,name,email,request.form.get("origin"),request.form.get("destination"),request.form.get("depart"),passengers,float(request.form.get("amount","0")),card[-4:],"pending",datetime.utcnow().isoformat()));c.commit();c.close();return redirect("/confirmation/"+code)
 @app.get("/confirmation/<code>")
 def confirmation(code):
  b=get_booking(code)
