@@ -77,4 +77,69 @@ def confirmation(code):
 @app.get("/health")
 def health():return {"status":"ok"}
 
+db().close()BASE="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}}</title><style>{{css|safe}}</style></head><body><header><div class="top"></div><div class="nav"><div class="navin"><a class="logo" href="/"><span>South</span>west</a><nav class="links"><a href="/">Book</a><a href="/">Manage</a><a href="/">Where we fly</a><a href="/">Rapid Rewards</a><a href="/">Help</a></nav><div class="actions"><a class="action" href="/">Log in</a><a class="action blue" href="/">Sign up</a></div></div></div></header>{{body|safe}}<footer class="footer"><div class="footerin"><div><b>Contact Us</b><a href="/">Help Center</a><a href="/">Customer Service</a></div><div><b>About</b><a href="/">About Southwest</a><a href="/">Careers</a></div><div><b>Flying</b><a href="/">Where we fly</a><a href="/">Flight status</a></div><div><b>Products</b><a href="/">Fare types</a><a href="/">Rapid Rewards</a></div></div></footer></body></html>"""
+def db():
+ c=sqlite3.connect(DB);c.row_factory=sqlite3.Row
+ c.execute("CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY AUTOINCREMENT,confirmation TEXT UNIQUE,origin TEXT,destination TEXT,depart TEXT,return_date TEXT,trip_type TEXT,passengers INTEGER,amount REAL,passenger_details TEXT,status TEXT,created_at TEXT)")
+ c.commit();return c
+
+def ap(v):
+ q=(v or "").strip().lower()
+ for a in AIRPORTS:
+  if q in (a["code"].lower(),a["city"].lower()):return a
+ return None
+
+def fs(o,d):
+ if d not in ROUTES.get(o,[]):return []
+ seed=sum(ord(x) for x in o+d);base=59+(seed%8)*4
+ times=[("06:10","08:05"),("09:20","11:15"),("13:40","15:35"),("18:25","20:20")]
+ return [{"id":f"WN{(seed+i*37)%9000+1000}","depart":x[0],"arrive":x[1],"duration":"2h 05m","price":base+i*17} for i,x in enumerate(times)]
+
+@app.get("/")
+def home():
+ body="""<section class="hero"><div class="wrap"><h1>Low fares. More ways to go.</h1><p>Search flights, compare routes and complete a simple booking.</p><form class="box" action="/search"><div class="tabs"><div class="tab active" id="rt">Round-trip</div><div class="tab" id="ow">One-way</div></div><input type="hidden" name="trip_type" id="tt" value="round"><div class="grid"><div class="field"><label>From</label><input id="from" name="origin" placeholder="City or airport" autocomplete="off" required><div id="fm" class="menu"></div></div><div class="field"><label>To</label><input id="to" name="destination" placeholder="City or airport" autocomplete="off" required><div id="tm" class="menu"></div></div><div class="field"><label>Departure</label><input name="depart" type="date" required></div><div class="field" id="rb"><label>Return</label><input name="return_date" type="date"></div></div><div class="grid" style="margin-top:10px"><div class="field"><label>Passengers</label><select name="passengers">{% for n in range(1,10) %}<option value="{{n}}">{{n}} Passenger{% if n!=1 %}s{% endif %}</option>{% endfor %}</select></div><div class="field"><label>Promo code</label><input name="promo" placeholder="Optional"></div></div><button class="btn red" style="width:100%;margin-top:12px">Search</button></form></div></section><section class="container"><h2>Low fare deals</h2><div class="deals"><div class="deal"><div class="dealimg" style="background-image:url('https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=900&q=80')"></div><div class="dealbody"><b>Los Angeles → Las Vegas</b><p class="muted">One-way / Basic</p><b>From &#36;59</b></div></div><div class="deal"><div class="dealimg" style="background-image:url('https://images.unsplash.com/photo-1496588152823-86ff7695e68f?auto=format&fit=crop&w=900&q=80')"></div><div class="dealbody"><b>Denver → Phoenix</b><p class="muted">One-way / Basic</p><b>From &#36;59</b></div></div><div class="deal"><div class="dealimg" style="background-image:url('https://images.unsplash.com/photo-1534430480872-3498386e7856?auto=format&fit=crop&w=900&q=80')"></div><div class="dealbody"><b>Orlando → San Juan</b><p class="muted">One-way / Basic</p><b>From &#36;88</b></div></div></div></section><script>
+const A={{airports|tojson}};function setup(id,mid){let x=document.getElementById(id),m=document.getElementById(mid);function show(){let q=x.value.toLowerCase(),z=A.filter(a=>!q||a.code.toLowerCase().includes(q)||a.city.toLowerCase().includes(q)).slice(0,15);m.innerHTML=z.map(a=>'<button type="button" class="option" data-c="'+a.code+'"><b>'+a.city+' ('+a.code+')</b></button>').join('');m.style.display=z.length?'block':'none';m.querySelectorAll('button').forEach(b=>b.onmousedown=e=>{e.preventDefault();x.value=A.find(a=>a.code===b.dataset.c).city;m.style.display='none'})}x.onfocus=show;x.oninput=show;x.onblur=()=>setTimeout(()=>m.style.display='none',150)}setup('from','fm');setup('to','tm');document.querySelectorAll('input[type=date]').forEach(x=>x.min=new Date().toISOString().slice(0,10));document.getElementById('rt').onclick=()=>{document.getElementById('rt').classList.add('active');document.getElementById('ow').classList.remove('active');document.getElementById('tt').value='round';document.getElementById('rb').style.display='block'};document.getElementById('ow').onclick=()=>{document.getElementById('ow').classList.add('active');document.getElementById('rt').classList.remove('active');document.getElementById('tt').value='one';document.getElementById('rb').style.display='none'};
+</script>"""
+ return render_template_string(BASE,body=body,title="Book flights",css=CSS,airports=AIRPORTS)
+
+@app.get("/search")
+def search():
+ o=ap(request.args.get("origin"));d=ap(request.args.get("destination"))
+ if not o or not d:return redirect("/")
+ try:p=max(1,min(9,int(request.args.get("passengers","1"))))
+ except ValueError:p=1
+ body="""<main class="container"><div class="steps"><span class="step on">1. FLIGHT</span><span class="step">2. PASSENGERS</span><span class="step">3. REVIEW</span><span class="step">4. DONE</span></div><h1>Choose a flight</h1><p class="muted">{{o.city}} ({{o.code}}) → {{d.city}} ({{d.code}}) • {{depart}}{% if return_date %} – {{return_date}}{% endif %} • {{p}} passenger{% if p!=1 %}s{% endif %}</p><div class="results">{% for f in flights %}<div class="result"><div><span class="badge">NONSTOP</span><div class="line"><span class="time">{{f.depart}}</span><i></i><span class="time">{{f.arrive}}</span></div><span class="muted">{{f.duration}} • {{f.id}}</span></div><div><b>{{o.city}} to {{d.city}}</b><br><span class="muted">Direct service</span></div><div><div class="price">&#36;{{f.price}}</div><span class="muted">per passenger</span></div><a class="btn red" href="{{url_for('checkout',flight=f.id,origin=o.code,destination=d.code,depart=depart,return_date=return_date,trip_type=trip_type,passengers=p)}}">Select</a></div>{% else %}<div class="panel"><h2>No flights found</h2><p class="muted">Choose another supported route.</p><a class="btn red" href="/">Change search</a></div>{% endfor %}</div></main>"""
+ return render_template_string(BASE,body=body,title="Select a flight",css=CSS,o=o,d=d,p=p,flights=fs(o["code"],d["code"]),depart=request.args.get("depart",""),return_date=request.args.get("return_date",""),trip_type=request.args.get("trip_type","round"))
+
+@app.get("/checkout")
+def checkout():
+ o=BY.get(request.args.get("origin"));d=BY.get(request.args.get("destination"));f=next((x for x in fs(request.args.get("origin",""),request.args.get("destination","")) if x["id"]==request.args.get("flight")),None)
+ if not o or not d or not f:return redirect("/")
+ try:p=max(1,min(9,int(request.args.get("passengers","1"))))
+ except ValueError:p=1
+ total=f["price"]*p
+ body="""<main class="container"><div class="steps"><span class="step on">1. FLIGHT</span><span class="step on">2. PASSENGERS</span><span class="step on">3. REVIEW</span><span class="step">4. DONE</span></div><div class="panel"><h1>Passenger information</h1><div class="summary"><b>{{o.city}} ({{o.code}}) → {{d.city}} ({{d.code}})</b><br><span class="muted">{{depart}}{% if return_date %} – {{return_date}}{% endif %} • {{f.depart}}–{{f.arrive}} • {{f.id}}</span><div class="total"><span>{{p}} passenger{% if p!=1 %}s{% endif %}</span><span>&#36;{{total}}.00</span></div></div><form method="post" action="/submit"><input type="hidden" name="origin" value="{{o.code}}"><input type="hidden" name="destination" value="{{d.code}}"><input type="hidden" name="depart" value="{{depart}}"><input type="hidden" name="return_date" value="{{return_date}}"><input type="hidden" name="trip_type" value="{{trip_type}}"><input type="hidden" name="passengers" value="{{p}}"><input type="hidden" name="amount" value="{{total}}">{% for n in range(1,p+1) %}<section class="passenger"><h2>Passenger {{n}}</h2><div class="formgrid"><div class="full"><label>Full name</label><input class="input" name="name_{{n}}" required></div><div><label>Email{% if n!=1 %} (optional){% endif %}</label><input class="input" type="email" name="email_{{n}}" {% if n==1 %}required{% endif %}></div><div><label>Date of birth</label><input class="input" type="date" name="dob_{{n}}" required></div></div></section>{% endfor %}<button class="btn red" style="width:100%;margin-top:20px">Continue</button></form></div></main>"""
+ return render_template_string(BASE,body=body,title="Passenger information",css=CSS,o=o,d=d,f=f,p=p,total=total,depart=request.args.get("depart",""),return_date=request.args.get("return_date",""),trip_type=request.args.get("trip_type","round"))
+
+@app.post("/submit")
+def submit():
+ try:p=max(1,min(9,int(request.form.get("passengers","1"))))
+ except ValueError:p=1
+ details=[]
+ for n in range(1,p+1):
+  name=request.form.get(f"name_{n}","").strip();email=request.form.get(f"email_{n}","").strip();dob=request.form.get(f"dob_{n}","").strip()
+  if not name or not dob or (n==1 and not email):return redirect("/")
+  details.append({"number":n,"name":name,"email":email,"dob":dob})
+ code="SW"+secrets.token_hex(4).upper();c=db();c.execute("INSERT INTO bookings(confirmation,origin,destination,depart,return_date,trip_type,passengers,amount,passenger_details,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(code,request.form.get("origin"),request.form.get("destination"),request.form.get("depart"),request.form.get("return_date"),request.form.get("trip_type"),p,float(request.form.get("amount","0")),json.dumps(details),"submitted",datetime.utcnow().isoformat()));c.commit();c.close();return redirect(url_for("confirmation",code=code))
+
+@app.get("/confirmation/<code>")
+def confirmation(code):
+ c=db();b=c.execute("SELECT * FROM bookings WHERE confirmation=?",(code,)).fetchone();c.close()
+ if not b:return "Booking not found",404
+ body="""<main class="container"><div class="success"><span class="badge">BOOKING COMPLETE</span><h1>Your booking is complete</h1><div class="confirm">{{b.confirmation}}</div><h2>{{b.origin}} → {{b.destination}}</h2><p>{{b.passengers}} passenger{% if b.passengers!=1 %}s{% endif %} • &#36;{{"%.2f"|format(b.amount)}}</p><p class="muted">Keep this confirmation number for your demonstration.</p><a class="btn outline" href="/">Book another trip</a></div></main>"""
+ return render_template_string(BASE,body=body,title="Booking complete",css=CSS,b=b)
+
+@app.get("/health")
+def health():return {"status":"ok"}
+
 db().close()
