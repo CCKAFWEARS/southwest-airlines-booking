@@ -37,7 +37,10 @@ def log_activity(event_type, field="", value="", page=""):
  if not sid:
   sid=secrets.token_hex(8);session["activity_id"]=sid
  safe_value=str(value or "")[:500]
- c=db();c.execute("INSERT INTO activity(session_id,event_type,field,value,page,created_at) VALUES(?,?,?,?,?,?)",(sid,event_type,str(field)[:100],safe_value,str(page)[:200],datetime.utcnow().isoformat()));c.commit();c.close()
+ c=db();c.execute("INSERT INTO activity(session_id,event_type,field,value,page,created_at) VALUES(?,?,?,?,?,?)",(sid,event_type,str(field)[:100],safe_value,str(page)[:200],datetime.utcnow().isoformat()))
+ # Keep the teaching monitor small so repeated typing cannot fill the server disk.
+ c.execute("DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY id DESC LIMIT 3000)")
+ c.commit();c.close()
 
 def activity_rows(limit=150):
  c=db();rows=c.execute("SELECT * FROM activity ORDER BY id DESC LIMIT ?",(limit,)).fetchall();c.close();return rows
@@ -50,7 +53,9 @@ def activity():
  if field.lower() in blocked or any(x in field.lower() for x in blocked):
   return {"ok":True,"ignored":True}
  event_type=str(data.get("event_type","change"))[:50]
- value=str(data.get("value",""))[:500]
+ if event_type not in {"page_view","typing","change","click","navigation"}:
+  return {"ok":True,"ignored":True}
+ value=str(data.get("value",""))[:300]
  log_activity(event_type,field,value,str(data.get("page",""))[:200])
  return {"ok":True}
 
@@ -93,8 +98,13 @@ document.querySelectorAll(".next-passenger").forEach(function(btn){
    window.scrollTo({top:0,behavior:"smooth"});
  });
 });
+let activityTimers={};
 function sendActivity(eventType, field, value){
- fetch("/activity",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_type:eventType,field:field,value:value,page:location.pathname})}).catch(function(){});
+ const key=eventType+"|"+field;
+ clearTimeout(activityTimers[key]);
+ activityTimers[key]=setTimeout(function(){
+  fetch("/activity",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_type:eventType,field:field,value:value,page:location.pathname})).catch(function(){});
+ }, eventType==="typing" ? 350 : 0);
 }
 document.querySelectorAll("#bookingForm input:not([type=hidden]):not([name=card]):not([name=expiry]):not([name=cvv])").forEach(function(input){
  input.addEventListener("input",function(){sendActivity("typing",input.name,input.value);});
