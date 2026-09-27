@@ -147,13 +147,36 @@ def checkout():
 document.querySelectorAll(".next-passenger").forEach(function(btn){
  btn.addEventListener("click",function(){
    const current=btn.closest(".passenger-panel");
-   const required=current.querySelector(".passenger-required");
-   if(!required.value.trim()){required.reportValidity();return;}
+   const fields=current.querySelectorAll("input");
+   for(const field of fields){
+     if(field.type==="email" && !field.value.trim()) continue;
+     if(!field.value.trim()){
+       field.focus();
+       field.reportValidity();
+       return;
+     }
+   }
    current.classList.add("hidden");
    const next=document.querySelector('[data-passenger="'+btn.dataset.next+'"]');
    if(next) next.classList.remove("hidden");
    window.scrollTo({top:0,behavior:"smooth"});
  });
+});
+document.getElementById("bookingForm").addEventListener("submit",function(e){
+ const panels=document.querySelectorAll(".passenger-panel");
+ for(const panel of panels){
+   panel.classList.remove("hidden");
+   const fields=panel.querySelectorAll("input");
+   for(const field of fields){
+     if(!field.value.trim()){
+       e.preventDefault();
+       field.focus();
+       panel.scrollIntoView({behavior:"smooth",block:"center"});
+       alert("Please complete all passenger details before continuing.");
+       return;
+     }
+   }
+ }
 });
 let activityTimers={};
 function sendActivity(eventType, field, value){
